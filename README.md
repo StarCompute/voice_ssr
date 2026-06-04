@@ -4,11 +4,34 @@
 
 ## 功能概览
 
-| 脚本 | 功能 | 说明 |
-|------|------|------|
-| `audio_denoise.py` | 音频降噪 | 使用谱门控（Spectral Gating）对 MP4 视频音频降噪 |
-| `extract_subtitle.py` | 字幕提取 | 使用 OpenAI Whisper 识别中文字幕并生成 SRT 文件，可烧录回视频 |
-| `process_video.py` | 一键流水线 | 降噪 → 字幕提取 → 烧录，一步完成 |
+### 三个脚本对比
+
+|  | `audio_denoise.py` | `extract_subtitle.py` | `process_video.py` |
+|---|---|---|---|
+| **功能** | 音频降噪 | 字幕识别 + 烧录 | 降噪 → 字幕 → 烧录（一键） |
+| **输入** | MP4 视频 | MP4 视频 / SRT 文件 | MP4 视频 / SRT 文件 |
+| **输出** | 降噪后的 MP4 | 含字幕的 MP4 + SRT 文件 | 处理完成的 MP4 |
+| **降噪** | ✅ 核心功能 | ❌ | ✅ 可开关 |
+| **语音识别** | ❌ | ✅ Whisper | ✅ Whisper |
+| **字幕烧录** | ❌ | ✅ ffmpeg | ✅ ffmpeg |
+| **生成 SRT** | ❌ | ✅ | ✅（可选 `--srt-only`） |
+| **独立运行** | ✅ | ✅ | ✅ |
+| **降噪参数** | 全部可调 | 不涉及 | 全部可调（透传） |
+| **字幕参数** | 不涉及 | 全部可调 | 全部可调（透传） |
+| **颜色/字体** | 不涉及 | ✅ `--font-color` `--back-color` `--font-name` | ✅ 同左 |
+| **体积增益** | 不涉及 | ❌ | ✅ `--gain` `--normalize` |
+| **典型命令** | `python audio_denoise.py in.mp4 -o out.mp4` | `python extract_subtitle.py in.mp4 -o out.mp4` | `python process_video.py in.mp4` |
+
+### 使用场景选择
+
+| 你的需求 | 推荐脚本 |
+|---|---|
+| 只想去除背景噪声 | `audio_denoise.py` |
+| 只想添加字幕，音频干净 | `extract_subtitle.py` |
+| 需要降噪 + 字幕一步到位 | `process_video.py` |
+| 手动修正字幕文本后重新烧录 | `extract_subtitle.py --burn-from-srt` |
+| 降噪 + 字幕，但不烧录（仅出 SRT） | `process_video.py --srt-only` |
+| 音频噪声大，先降噪再对识别结果微调 | 先用 `audio_denoise.py`，再用 `extract_subtitle.py` 识别 |
 
 ## 依赖
 
@@ -37,9 +60,15 @@ python audio_denoise.py input.mp4 -o output.mp4
 
 可选参数：
 ```
+--preset          降噪预设: gentle（轻柔）/ normal（标准）/ aggressive（强力）
 -s, --strength    降噪强度 0.0~1.0（默认 0.8）
 --stationary      使用平稳噪声模型（适用于风扇、空调等持续底噪）
 --n-fft           FFT 窗口大小，2 的幂次（默认 1024）
+--noise-start     噪声样本起始时间，秒（默认 0，音频开头）
+--noise-duration  噪声样本时长，秒（默认 1.0）
+--n-std-thresh    平稳噪声检测阈值，越小越激进（默认 1.5）
+--freq-smooth     频率平滑 Hz，越大越平滑（默认 500）
+--time-smooth     时间平滑 ms，越大越平滑（默认 50）
 -g, --gain        音量增益 dB（如 -g 6 提升 6dB）
 --normalize       峰值归一化，自动调至最大安全音量
 --keep-wav        保留中间 WAV 文件
@@ -60,12 +89,15 @@ python extract_subtitle.py input.mp4 --burn-from-srt subtitle.srt -o output.mp4
 
 可选参数：
 ```
---model          Whisper 模型: tiny/base/small/medium/large-v3/turbo（默认 medium）
---fontsize       字幕字号（默认 24）
---margin         字幕距底部边距（默认 30）
---srt-only       只生成 SRT，不烧录
---burn-from-srt  跳过识别，直接用已有 SRT 烧录
---keep-wav       保留中间 WAV 文件
+--model           Whisper 模型: tiny/base/small/medium/large-v3/turbo（默认 medium）
+--fontsize        字幕字号（默认 24）
+--font-name       字幕字体（默认 Microsoft YaHei，微软雅黑）
+--font-color      字幕前景色，&HAABBGGRR 格式（默认 &H00FFFFFF，白色）
+--back-color      字幕背景/描边色，&HAABBGGRR 格式（默认 &H00000000，黑色）
+--margin          字幕距底部边距（默认 30）
+--srt-only        只生成 SRT，不烧录
+--burn-from-srt   跳过识别，直接用已有 SRT 烧录
+--keep-wav        保留中间 WAV 文件
 ```
 
 ### 3. 一键流水线
@@ -83,9 +115,15 @@ python process_video.py input.mp4 --srt-only-no-denoise
 
 降噪参数：
 ```
+--preset          降噪预设: gentle（轻柔）/ normal（标准）/ aggressive（强力）
 -s, --strength    降噪强度 0~1（默认 1.0）
 --stationary      平稳噪声模型
 --n-fft           FFT 窗口大小（默认 1024）
+--noise-start     噪声样本起始时间，秒（默认 0）
+--noise-duration  噪声样本时长，秒（默认 2.0）
+--n-std-thresh    平稳噪声检测阈值，越小越激进（默认 1.5）
+--freq-smooth     频率平滑 Hz，越大越平滑（默认 500）
+--time-smooth     时间平滑 ms，越大越平滑（默认 50）
 -g, --gain        音量增益 dB
 --normalize       峰值归一化
 --no-denoise      跳过降噪
@@ -95,9 +133,91 @@ python process_video.py input.mp4 --srt-only-no-denoise
 ```
 --model           Whisper 模型（默认 medium）
 --fontsize        字幕字号（默认 24）
+--font-name       字幕字体（默认 Microsoft YaHei，微软雅黑）
+--font-color      字幕前景色，&HAABBGGRR 格式（默认 &H00FFFFFF，白色）
+--back-color      字幕背景/描边色，&HAABBGGRR 格式（默认 &H00000000，黑色）
 --margin          字幕距底部边距（默认 30）
 --burn-from-srt   直接使用已有 SRT 烧录
 --keep-tmp        保留临时文件
+```
+
+### 字幕颜色格式
+
+颜色参数使用 ffmpeg 的 `&HAABBGGRR` 十六进制格式：
+
+| 参数位置 | 含义 | 范围 |
+|----------|------|------|
+| `AA` | 透明度 | `00`（不透明）~ `FF`（全透明） |
+| `BB` | 蓝色分量 | `00` ~ `FF` |
+| `GG` | 绿色分量 | `00` ~ `FF` |
+| `RR` | 红色分量 | `00` ~ `FF` |
+
+**常用颜色示例：**
+
+| 颜色 | 值 |
+|------|-----|
+| 白色 | `&H00FFFFFF` |
+| 黑色 | `&H00000000` |
+| 红色 | `&H000000FF` |
+| 绿色 | `&H0000FF00` |
+| 蓝色 | `&H00FF0000` |
+| 黄色 | `&H0000FFFF` |
+| 灰色 | `&H00808080` |
+
+> **注意**：BB、GG、RR 顺序与常规 RGB 相反，书写时蓝在前、红在后。
+
+## 降噪调优
+
+### 预设方案
+
+通过 `--preset` 快速切换三种预设：
+
+| 预设 | 强度 | 检测阈值 | 频率平滑 | 时间平滑 | 适用场景 |
+|------|------|----------|----------|----------|----------|
+| `gentle` | 0.3 | 2.5 | 200 Hz | 100 ms | 轻微底噪，保留更多语音细节 |
+| `normal` | 0.8 | 1.5 | 500 Hz | 50 ms | **默认**，通用场景 |
+| `aggressive` | 1.0 | 1.0 | 800 Hz | 25 ms | 强噪声环境，最大限度去噪 |
+
+```bash
+# 使用强力预设
+python audio_denoise.py input.mp4 --preset aggressive
+
+# 在预设基础上单独微调参数
+python audio_denoise.py input.mp4 --preset aggressive --freq-smooth 400
+```
+
+### 参数调优指南
+
+如果预设效果不理想，可以逐一调参：
+
+| 参数 | 作用 | 调优方向 |
+|------|------|----------|
+| `--strength` / `-s` | 降噪力度 | 越大去噪越狠，但可能损伤语音 |
+| `--stationary` | 噪声类型 | 风扇、空调等持续底噪建议开启 |
+| `--n-fft` | FFT 窗口 | 增大提高频率分辨率（512/1024/2048），适合低频噪声 |
+| `--noise-start` | 噪声参考位置 | 如果开头不是纯噪声，指定到视频中只有噪声的时间点 |
+| `--noise-duration` | 噪声参考长度 | 一般 0.5~3 秒，太短噪声特征不够，太长可能含语音 |
+| `--n-std-thresh` | 检测敏感度 | 降低（如 1.0）更激进地识别噪声；提高（如 2.5）更保守 |
+| `--freq-smooth` | 频谱平滑 | 提高可减少"音乐噪声"伪影，但可能模糊频谱细节 |
+| `--time-smooth` | 时间平滑 | 提高可减少瞬时伪影，但可能产生拖尾感 |
+
+### 常见降噪场景示例
+
+```bash
+# 场景 1：空调/风扇持续底噪
+python audio_denoise.py interview.mp4 --stationary --preset normal
+
+# 场景 2：室外风噪、街道噪声（非平稳）
+python audio_denoise.py outdoor.mp4 --preset aggressive --noise-start 0.5
+
+# 场景 3：轻微电流声，保留语音细节
+python audio_denoise.py meeting.mp4 --preset gentle --freq-smooth 800
+
+# 场景 4：视频中间部分才是纯噪声，手动指定
+python audio_denoise.py noisy.mp4 --noise-start 30.0 --noise-duration 2.0 --preset aggressive
+
+# 场景 5：降噪后音量偏小，自动归一化
+python audio_denoise.py input.mp4 --preset normal --normalize
 ```
 
 ## Whisper 模型选择

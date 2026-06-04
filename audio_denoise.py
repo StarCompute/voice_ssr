@@ -24,10 +24,41 @@ import soundfile as sf
 # ── 配置 ──────────────────────────────────────────────
 # 降噪强度（0.0 ~ 1.0，越大降噪越狠，默认 0.8）
 DEFAULT_PROP_DECREASE = 0.8
-# 噪声样本时长（秒），从音频开头截取作为噪声参考
-NOISE_SAMPLE_SECS = 1.0
+# 噪声样本起始时间（秒），0 表示从音频开头截取
+DEFAULT_NOISE_START = 0.0
+# 噪声样本时长（秒）
+DEFAULT_NOISE_DURATION = 1.0
 # FFT 窗口大小（2 的幂次，越大频率分辨率越高，默认 1024）
 DEFAULT_N_FFT = 1024
+# 平稳噪声检测阈值（越小越激进，默认 1.5）
+DEFAULT_N_STD_THRESH = 1.5
+# 频率平滑（Hz），越大频谱越平滑但可能模糊细节
+DEFAULT_FREQ_SMOOTH = 500
+# 时间平滑（ms），越大时间上越平滑但可能产生拖尾
+DEFAULT_TIME_SMOOTH = 50
+
+# ── 降噪预设 ────────────────────────────────────────
+# 预设覆盖 prop_decrease / n_std_thresh / freq_smooth / time_smooth
+DENOISE_PRESETS = {
+    "gentle": {
+        "prop_decrease": 0.3,
+        "n_std_thresh_stationary": 2.5,
+        "freq_mask_smooth_hz": 200,
+        "time_mask_smooth_ms": 100,
+    },
+    "normal": {
+        "prop_decrease": 0.8,
+        "n_std_thresh_stationary": 1.5,
+        "freq_mask_smooth_hz": 500,
+        "time_mask_smooth_ms": 50,
+    },
+    "aggressive": {
+        "prop_decrease": 1.0,
+        "n_std_thresh_stationary": 1.0,
+        "freq_mask_smooth_hz": 800,
+        "time_mask_smooth_ms": 25,
+    },
+}
 
 # ffmpeg 常见安装路径（Windows / Linux / macOS）
 _FFMPEG_CANDIDATES = [
@@ -96,6 +127,11 @@ def denoise_audio(
     n_fft: int = DEFAULT_N_FFT,
     gain_db: float = 0.0,
     normalize: bool = False,
+    noise_start: float = DEFAULT_NOISE_START,
+    noise_duration: float = DEFAULT_NOISE_DURATION,
+    n_std_thresh_stationary: float = DEFAULT_N_STD_THRESH,
+    freq_mask_smooth_hz: int = DEFAULT_FREQ_SMOOTH,
+    time_mask_smooth_ms: int = DEFAULT_TIME_SMOOTH,
 ) -> None:
     """对 WAV 执行谱门控降噪 + 音量调节。"""
     data, sr = sf.read(wav_path, dtype="float32")
@@ -103,9 +139,10 @@ def denoise_audio(
     if data.ndim > 1:   # 多声道 → 取平均转为单声道
         data = data.mean(axis=1)
 
-    # 取开头 NOISE_SAMPLE_SECS 秒作为噪声参考
-    noise_len = int(sr * NOISE_SAMPLE_SECS)
-    noise_sample = data[:noise_len]
+    # 从指定位置截取噪声参考
+    noise_start_idx = int(sr * noise_start)
+    noise_len = int(sr * noise_duration)
+    noise_sample = data[noise_start_idx:noise_start_idx + noise_len]
 
     # 降噪前 RMS
     rms_before = float(np.sqrt(np.mean(data ** 2)))
@@ -117,7 +154,9 @@ def denoise_audio(
         prop_decrease=prop_decrease,
         stationary=stationary,
         n_fft=n_fft,
-        n_std_thresh_stationary=1.5,
+        n_std_thresh_stationary=n_std_thresh_stationary,
+        freq_mask_smooth_hz=freq_mask_smooth_hz,
+        time_mask_smooth_ms=time_mask_smooth_ms,
     )
 
     # 降噪后 RMS
@@ -163,8 +202,8 @@ def denoise_audio(
 
     if rms_denoise_change < 1.0:
         print(f"  [警告] 降噪几乎无变化！可能原因:")
-        print(f"    1. 开头 {NOISE_SAMPLE_SECS}s 不是纯噪声（含语音/音乐）→ 试试 --stationary")
-        print(f"    2. 降噪强度太低 → 试试 -s 0.95")
+        print(f"    1. 噪声样本段 ({noise_start}s~{noise_start + noise_duration}s) 不是纯噪声 → 试试 --noise-start 或 --preset aggressive")
+        print(f"    2. 降噪强度太低 → 试试 -s 0.95 或 --preset aggressive")
         print(f"    3. 视频本身噪声很小 → 无需降噪")
 
 
@@ -195,6 +234,11 @@ def main():
         help="输出路径（默认: 输入名_denoised.mp4）",
     )
     parser.add_argument(
+        "--preset",
+        choices=list(DENOISE_PRESETS.keys()),
+        help="降噪预设方案: gentle（轻柔）/ normal（标准）/ aggressive（强力）",
+    )
+    parser.add_argument(
         "-s", "--strength",
         type=float,
         default=DEFAULT_PROP_DECREASE,
@@ -210,6 +254,36 @@ def main():
         type=int,
         default=DEFAULT_N_FFT,
         help=f"FFT 窗口大小，2的幂次（默认 {DEFAULT_N_FFT}）",
+    )
+    parser.add_argument(
+        "--noise-start",
+        type=float,
+        default=DEFAULT_NOISE_START,
+        help=f"噪声样本起始时间，秒（默认 {DEFAULT_NOISE_START}，音频开头）",
+    )
+    parser.add_argument(
+        "--noise-duration",
+        type=float,
+        default=DEFAULT_NOISE_DURATION,
+        help=f"噪声样本时长，秒（默认 {DEFAULT_NOISE_DURATION}）",
+    )
+    parser.add_argument(
+        "--n-std-thresh",
+        type=float,
+        default=DEFAULT_N_STD_THRESH,
+        help=f"平稳噪声检测阈值，越小越激进（默认 {DEFAULT_N_STD_THRESH}）",
+    )
+    parser.add_argument(
+        "--freq-smooth",
+        type=int,
+        default=DEFAULT_FREQ_SMOOTH,
+        help=f"频率平滑 Hz，越大越平滑（默认 {DEFAULT_FREQ_SMOOTH}）",
+    )
+    parser.add_argument(
+        "--time-smooth",
+        type=int,
+        default=DEFAULT_TIME_SMOOTH,
+        help=f"时间平滑 ms，越大越平滑（默认 {DEFAULT_TIME_SMOOTH}）",
     )
     parser.add_argument(
         "-g", "--gain",
@@ -236,13 +310,28 @@ def main():
 
     output = Path(args.output) if args.output else video.with_stem(video.stem + "_denoised")
 
+    # ── 应用预设（命令行单独指定的参数不覆盖）────
+    if args.preset:
+        preset = DENOISE_PRESETS[args.preset]
+        if args.strength == DEFAULT_PROP_DECREASE:
+            args.strength = preset["prop_decrease"]
+        if args.n_std_thresh == DEFAULT_N_STD_THRESH:
+            args.n_std_thresh = preset["n_std_thresh_stationary"]
+        if args.freq_smooth == DEFAULT_FREQ_SMOOTH:
+            args.freq_smooth = preset["freq_mask_smooth_hz"]
+        if args.time_smooth == DEFAULT_TIME_SMOOTH:
+            args.time_smooth = preset["time_mask_smooth_ms"]
+
     # 临时 WAV 文件（同输出目录）
     wav_raw = output.with_suffix(".raw.wav")
     wav_denoised = output.with_suffix(".denoised.wav")
 
     print(f"输入: {video}")
     print(f"输出: {output}")
+    if args.preset:
+        print(f"降噪预设: {args.preset}")
     print(f"降噪强度: {args.strength}")
+    print(f"噪声样本: {args.noise_start}s ~ {args.noise_start + args.noise_duration}s")
     if args.normalize:
         print(f"音量: 峰值归一化")
     elif args.gain != 0:
@@ -254,7 +343,9 @@ def main():
 
     # 2) 降噪
     print("[2/3] 降噪处理...")
-    denoise_audio(wav_raw, wav_denoised, args.strength, args.stationary, args.n_fft, args.gain, args.normalize)
+    denoise_audio(wav_raw, wav_denoised, args.strength, args.stationary, args.n_fft,
+                  args.gain, args.normalize, args.noise_start, args.noise_duration,
+                  args.n_std_thresh, args.freq_smooth, args.time_smooth)
 
     # 3) 合并回去
     print("[3/3] 合并音视频...")

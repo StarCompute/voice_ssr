@@ -25,6 +25,12 @@ DEFAULT_MODEL = "medium"        # tiny/small/medium/large-v3，中文推荐 medi
 SRT_MAX_CHARS = 22             # 单条字幕最大字符数（中文自然语速约2~3秒）
 MIN_SEG_OVERLAP = 0.05         # 重叠阈值（秒），相邻段重叠超过此值才合并，紧贴不合并
 
+# 字幕样式默认配置（命令行参数可覆盖）
+DEFAULT_FONT_NAME = "Microsoft YaHei"       # 字体名称（Windows 推荐微软雅黑）
+DEFAULT_FONT_SIZE = 24                      # 字号
+DEFAULT_FONT_COLOR = "&H00FFFFFF"           # 前景色（白色, &HAABBGGRR 格式）
+DEFAULT_BACK_COLOR = "&H00000000"           # 背景/描边色（黑色, &HAABBGGRR 格式）
+
 # ffmpeg 候选路径（复用 audio_denoise 的逻辑）
 _FFMPEG_CANDIDATES = [
     "ffmpeg",
@@ -236,14 +242,18 @@ def generate_srt(segments: list[dict], srt_path: Path) -> None:
 
 # ── 步骤 4: 烧录字幕到视频 ────────────────────────────
 def burn_subtitle(video_path: Path, srt_path: Path, out_path: Path,
-                  fontsize: int = 24, margin: int = 30) -> None:
+                  fontsize: int = DEFAULT_FONT_SIZE, margin: int = 30,
+                  font_name: str = DEFAULT_FONT_NAME,
+                  font_color: str = DEFAULT_FONT_COLOR,
+                  back_color: str = DEFAULT_BACK_COLOR) -> None:
     """用 ffmpeg 将 SRT 字幕烧录到视频。"""
     # Windows 下路径冒号需转义：C:/... → C\:/...
     srt_escaped = srt_path.as_posix().replace(":", "\\:")
     vf = (
         f"subtitles='{srt_escaped}'"
-        f":force_style='FontSize={fontsize},MarginV={margin},"
-        f"Alignment=2,Outline=1,Shadow=1'"
+        f":force_style='FontName={font_name},FontSize={fontsize},"
+        f"PrimaryColour={font_color},OutlineColour={back_color},"
+        f"MarginV={margin},Alignment=2,Outline=1,Shadow=1'"
     )
     run_cmd(
         ["ffmpeg", "-y",
@@ -267,8 +277,14 @@ def main():
                         help="只生成 SRT 字幕文件，不烧录到视频")
     parser.add_argument("--burn-from-srt", metavar="SRT文件",
                         help="跳过识别，直接用已有 SRT 文件烧录（支持手动修正后重新烧录）")
-    parser.add_argument("--fontsize", type=int, default=24,
-                        help="字幕字号（默认 24）")
+    parser.add_argument("--fontsize", type=int, default=DEFAULT_FONT_SIZE,
+                        help=f"字幕字号（默认 {DEFAULT_FONT_SIZE}）")
+    parser.add_argument("--font-name", default=DEFAULT_FONT_NAME,
+                        help=f"字幕字体名称（默认 {DEFAULT_FONT_NAME}）")
+    parser.add_argument("--font-color", default=DEFAULT_FONT_COLOR,
+                        help=f"字幕前景色 &HAABBGGRR 格式（默认 {DEFAULT_FONT_COLOR}，白色）")
+    parser.add_argument("--back-color", default=DEFAULT_BACK_COLOR,
+                        help=f"字幕背景/描边色 &HAABBGGRR 格式（默认 {DEFAULT_BACK_COLOR}，黑色）")
     parser.add_argument("--margin", type=int, default=30,
                         help="字幕距底部边距（默认 30）")
     parser.add_argument("--keep-wav", action="store_true",
@@ -292,7 +308,8 @@ def main():
         print(f"输出:     {output}")
         print()
         print("[烧录] 字幕烧录到视频...")
-        burn_subtitle(video, srt_path, output, args.fontsize, args.margin)
+        burn_subtitle(video, srt_path, output, args.fontsize, args.margin,
+                      args.font_name, args.font_color, args.back_color)
         print(f"\n[完成] {output}")
         return
 
@@ -336,7 +353,8 @@ def main():
         print(f'   2. 重新烧录: python extract_subtitle.py "{video}" --burn-from-srt "{srt_path}"')
     else:
         print("[4/4] 烧录字幕到视频...")
-        burn_subtitle(video, srt_path, output, args.fontsize, args.margin)
+        burn_subtitle(video, srt_path, output, args.fontsize, args.margin,
+                      args.font_name, args.font_color, args.back_color)
         print(f"\n[完成] {output}")
         print(f"\n[提示] SRT 字幕已保留: {srt_path}")
         print("   如需修正识别错误:")

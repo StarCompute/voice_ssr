@@ -27,11 +27,43 @@ import whisper
 
 # ── 配置 ──────────────────────────────────────────────
 DEFAULT_PROP_DECREASE = 1.0   # 降噪强度
-NOISE_SAMPLE_SECS = 2.0       # 噪声参考时长（秒）
+DEFAULT_NOISE_START = 0.0     # 噪声样本起始时间（秒）
+DEFAULT_NOISE_DURATION = 2.0  # 噪声参考时长（秒）
 DEFAULT_N_FFT = 1024          # FFT 窗口
+DEFAULT_N_STD_THRESH = 1.5    # 平稳噪声检测阈值
+DEFAULT_FREQ_SMOOTH = 500     # 频率平滑 Hz
+DEFAULT_TIME_SMOOTH = 50      # 时间平滑 ms
 DEFAULT_MODEL = "medium"      # Whisper 模型（tiny/small/medium/large-v3，中文推荐 medium+）
 SRT_MAX_CHARS = 22            # 单条字幕最大字符数（中文自然语速约2~3秒）
 MIN_SEG_OVERLAP = 0.05         # 重叠阈值（秒），相邻段重叠超过此值才合并，紧贴不回合并
+
+# 字幕样式默认配置（命令行参数可覆盖）
+DEFAULT_FONT_NAME = "Microsoft YaHei"       # 字体名称（Windows 推荐微软雅黑）
+DEFAULT_FONT_SIZE = 24                      # 字号
+DEFAULT_FONT_COLOR = "&H00FFFFFF"           # 前景色（白色, &HAABBGGRR 格式）
+DEFAULT_BACK_COLOR = "&H00000000"           # 背景/描边色（黑色, &HAABBGGRR 格式）
+
+# ── 降噪预设 ────────────────────────────────────────
+DENOISE_PRESETS = {
+    "gentle": {
+        "prop_decrease": 0.3,
+        "n_std_thresh_stationary": 2.5,
+        "freq_mask_smooth_hz": 200,
+        "time_mask_smooth_ms": 100,
+    },
+    "normal": {
+        "prop_decrease": 0.8,
+        "n_std_thresh_stationary": 1.5,
+        "freq_mask_smooth_hz": 500,
+        "time_mask_smooth_ms": 50,
+    },
+    "aggressive": {
+        "prop_decrease": 1.0,
+        "n_std_thresh_stationary": 1.0,
+        "freq_mask_smooth_hz": 800,
+        "time_mask_smooth_ms": 25,
+    },
+}
 
 _FFMPEG_CANDIDATES = [
     "ffmpeg",
@@ -84,19 +116,28 @@ def extract_audio(video_path: Path, wav_path: Path) -> None:
 
 def denoise_audio(wav_path: Path, out_wav_path: Path,
                   prop_decrease: float, stationary: bool,
-                  n_fft: int, normalize: bool, gain_db: float) -> None:
+                  n_fft: int, normalize: bool, gain_db: float,
+                  noise_start: float = DEFAULT_NOISE_START,
+                  noise_duration: float = DEFAULT_NOISE_DURATION,
+                  n_std_thresh_stationary: float = DEFAULT_N_STD_THRESH,
+                  freq_mask_smooth_hz: int = DEFAULT_FREQ_SMOOTH,
+                  time_mask_smooth_ms: int = DEFAULT_TIME_SMOOTH) -> None:
     data, sr = sf.read(wav_path, dtype="float32")
     if data.ndim > 1:
         data = data.mean(axis=1)
 
-    noise_len = int(sr * NOISE_SAMPLE_SECS)
-    noise_sample = data[:noise_len]
+    noise_start_idx = int(sr * noise_start)
+    noise_len = int(sr * noise_duration)
+    noise_sample = data[noise_start_idx:noise_start_idx + noise_len]
     rms_before = float(np.sqrt(np.mean(data ** 2)))
 
     reduced = nr.reduce_noise(
         y=data, sr=sr, y_noise=noise_sample,
         prop_decrease=prop_decrease, stationary=stationary,
-        n_fft=n_fft, n_std_thresh_stationary=1.5,
+        n_fft=n_fft,
+        n_std_thresh_stationary=n_std_thresh_stationary,
+        freq_mask_smooth_hz=freq_mask_smooth_hz,
+        time_mask_smooth_ms=time_mask_smooth_ms,
     )
 
     rms_denoised = float(np.sqrt(np.mean(reduced ** 2)))
@@ -315,11 +356,15 @@ def generate_srt(segments: list[dict], srt_path: Path) -> None:
 
 
 def burn_subtitle(video_path: Path, srt_path: Path, out_path: Path,
-                  fontsize: int = 24, margin: int = 30) -> None:
+                  fontsize: int = DEFAULT_FONT_SIZE, margin: int = 30,
+                  font_name: str = DEFAULT_FONT_NAME,
+                  font_color: str = DEFAULT_FONT_COLOR,
+                  back_color: str = DEFAULT_BACK_COLOR) -> None:
     srt_escaped = srt_path.as_posix().replace(":", "\\:")
     vf = (f"subtitles='{srt_escaped}'"
-          f":force_style='FontSize={fontsize},MarginV={margin},"
-          f"Alignment=2,Outline=1,Shadow=1'")
+          f":force_style='FontName={font_name},FontSize={fontsize},"
+          f"PrimaryColour={font_color},OutlineColour={back_color},"
+          f"MarginV={margin},Alignment=2,Outline=1,Shadow=1'")
     run_cmd(
         ["ffmpeg", "-y", "-i", str(video_path), "-vf", vf,
          "-c:a", "copy", str(out_path)],
@@ -342,12 +387,24 @@ def main():
 
     # 降噪参数
     g_denoise = parser.add_argument_group("降噪参数")
+    g_denoise.add_argument("--preset", choices=list(DENOISE_PRESETS.keys()),
+                           help="降噪预设方案: gentle（轻柔）/ normal（标准）/ aggressive（强力）")
     g_denoise.add_argument("-s", "--strength", type=float, default=DEFAULT_PROP_DECREASE,
                            help=f"降噪强度 0~1（默认 {DEFAULT_PROP_DECREASE}）")
     g_denoise.add_argument("--stationary", action="store_true",
                            help="平稳噪声模型（风扇/空调底噪）")
     g_denoise.add_argument("--n-fft", type=int, default=DEFAULT_N_FFT,
                            help=f"FFT 窗口大小（默认 {DEFAULT_N_FFT}）")
+    g_denoise.add_argument("--noise-start", type=float, default=DEFAULT_NOISE_START,
+                           help=f"噪声样本起始时间，秒（默认 {DEFAULT_NOISE_START}）")
+    g_denoise.add_argument("--noise-duration", type=float, default=DEFAULT_NOISE_DURATION,
+                           help=f"噪声样本时长，秒（默认 {DEFAULT_NOISE_DURATION}）")
+    g_denoise.add_argument("--n-std-thresh", type=float, default=DEFAULT_N_STD_THRESH,
+                           help=f"平稳噪声检测阈值，越小越激进（默认 {DEFAULT_N_STD_THRESH}）")
+    g_denoise.add_argument("--freq-smooth", type=int, default=DEFAULT_FREQ_SMOOTH,
+                           help=f"频率平滑 Hz，越大越平滑（默认 {DEFAULT_FREQ_SMOOTH}）")
+    g_denoise.add_argument("--time-smooth", type=int, default=DEFAULT_TIME_SMOOTH,
+                           help=f"时间平滑 ms，越大越平滑（默认 {DEFAULT_TIME_SMOOTH}）")
     g_denoise.add_argument("-g", "--gain", type=float, default=0.0,
                            help="音量增益 dB（默认 0）")
     g_denoise.add_argument("--normalize", action="store_true",
@@ -360,7 +417,14 @@ def main():
     g_sub.add_argument("--model", default=DEFAULT_MODEL,
                        help="Whisper 模型: tiny(151M)/base(145M)/small(461M)/"
                             f"medium(1.5G)/large-v3(2.9G)/turbo(809M)（默认 {DEFAULT_MODEL}）")
-    g_sub.add_argument("--fontsize", type=int, default=24, help="字幕字号（默认 24）")
+    g_sub.add_argument("--fontsize", type=int, default=DEFAULT_FONT_SIZE,
+                       help=f"字幕字号（默认 {DEFAULT_FONT_SIZE}）")
+    g_sub.add_argument("--font-name", default=DEFAULT_FONT_NAME,
+                       help=f"字幕字体名称（默认 {DEFAULT_FONT_NAME}）")
+    g_sub.add_argument("--font-color", default=DEFAULT_FONT_COLOR,
+                       help=f"字幕前景色 &HAABBGGRR 格式（默认 {DEFAULT_FONT_COLOR}，白色）")
+    g_sub.add_argument("--back-color", default=DEFAULT_BACK_COLOR,
+                       help=f"字幕背景/描边色 &HAABBGGRR 格式（默认 {DEFAULT_BACK_COLOR}，黑色）")
     g_sub.add_argument("--margin", type=int, default=30, help="字幕距底部边距（默认 30）")
     g_sub.add_argument("--burn-from-srt", metavar="SRT文件",
                        help="跳过识别，用已有 SRT 直接烧录到降噪版视频")
@@ -374,6 +438,18 @@ def main():
         sys.exit(1)
 
     do_denoise = not args.no_denoise and not args.srt_only_no_denoise
+
+    # ── 应用降噪预设（命令行单独指定的参数不覆盖）────
+    if args.preset:
+        preset = DENOISE_PRESETS[args.preset]
+        if args.strength == DEFAULT_PROP_DECREASE:
+            args.strength = preset["prop_decrease"]
+        if args.n_std_thresh == DEFAULT_N_STD_THRESH:
+            args.n_std_thresh = preset["n_std_thresh_stationary"]
+        if args.freq_smooth == DEFAULT_FREQ_SMOOTH:
+            args.freq_smooth = preset["freq_mask_smooth_hz"]
+        if args.time_smooth == DEFAULT_TIME_SMOOTH:
+            args.time_smooth = preset["time_mask_smooth_ms"]
 
     output = Path(args.output) if args.output else video.with_stem(video.stem + "_final")
     srt_path = output.with_suffix(".srt")
@@ -417,7 +493,9 @@ def main():
             print("[1/3] 提取音频并降噪...")
             extract_audio(video, wav_raw)
             denoise_audio(wav_raw, wav_denoised, args.strength, args.stationary,
-                          args.n_fft, args.normalize, args.gain)
+                          args.n_fft, args.normalize, args.gain,
+                          args.noise_start, args.noise_duration,
+                          args.n_std_thresh, args.freq_smooth, args.time_smooth)
             print("[2/3] 合并降噪音频到视频...")
             merge_audio_to_video(video, wav_denoised, denoised_video)
             video_to_burn = denoised_video
@@ -427,7 +505,8 @@ def main():
             step = 1
 
         print(f"[{step}/{step}] 烧录字幕...")
-        burn_subtitle(video_to_burn, srt_input, output, args.fontsize, args.margin)
+        burn_subtitle(video_to_burn, srt_input, output, args.fontsize, args.margin,
+                      args.font_name, args.font_color, args.back_color)
         print(f"\n[完成] {output}")
 
         if not args.keep_tmp:
@@ -461,7 +540,9 @@ def main():
     if do_denoise:
         print("[2/5] 音频降噪...")
         denoise_audio(wav_raw, wav_denoised, args.strength, args.stationary,
-                      args.n_fft, args.normalize, args.gain)
+                      args.n_fft, args.normalize, args.gain,
+                      args.noise_start, args.noise_duration,
+                      args.n_std_thresh, args.freq_smooth, args.time_smooth)
 
         print("[3/5] 合并降噪音频到视频...")
         merge_audio_to_video(video, wav_denoised, denoised_video)
@@ -494,7 +575,8 @@ def main():
         print(f'  python process_video.py "{video}" --burn-from-srt "{srt_path}"')
     else:
         print(f"[5/5] 烧录字幕到降噪版视频...")
-        burn_subtitle(video_working, srt_path, output, args.fontsize, args.margin)
+        burn_subtitle(video_working, srt_path, output, args.fontsize, args.margin,
+                      args.font_name, args.font_color, args.back_color)
         print(f"\n[完成] {output}")
         print(f"\n[提示] SRT 已保留: {srt_path}")
         print(f"  修正后重新烧录:")
