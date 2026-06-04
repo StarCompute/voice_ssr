@@ -1,0 +1,5 @@
+# 所有脚本共用依赖
+noisereduce>=3.0
+soundfile>=0.12
+numpy>=1.24
+openai-whisper
