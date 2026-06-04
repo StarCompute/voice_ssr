@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Sean Pu
+# Released under the MIT License. See LICENSE file for details.
 """视频处理一键流水线：降噪 + 中文字幕提取 + 烧录
 
 流程:
