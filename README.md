@@ -98,19 +98,9 @@ python process_video.py video.mp4 --preset normal
 # 强力降噪，适合嘈杂室外
 python process_video.py video.mp4 --preset aggressive
 
-# 仅降噪不动字幕
-python process_video.py video.mp4 --no-denoise  # 写错了，应该是 --no-denoise? 不对...
+# 跳过降噪，仅识别+烧录
+python process_video.py video.mp4 --no-denoise
 ```
-
-等等，我需要确认参数。`--no-denoise` 是跳过降噪。让我仔细想想...
-
-实际上：
-- 默认行为是完整流水线（降噪 + 识别 + 烧录）
-- `--no-denoise` 跳过降噪
-- `--srt-only` 降噪 + 识别但不烧录
-- `--srt-only-no-denoise` 仅识别不降噪不烧录
-
-让我仔细设计 README 的命令示例。
 
 #### 精细调参
 
@@ -418,4 +408,28 @@ voice_ssr/
 
 ## 许可证
 
+### 本项目
+
 Copyright (c) 2026 **Sean Pu** — 基于 [MIT License](LICENSE) 开源。
+
+### 第三方开源软件许可
+
+本项目使用了以下第三方开源软件。根据各软件的开源许可证要求，列出其版权及许可信息：
+
+| 依赖 | 许可证 | 版权归属 | 用途 |
+|------|--------|----------|------|
+| [noisereduce](https://github.com/timsainb/noisereduce) | MIT | (c) 2019 Tim Sainburg | 谱门控音频降噪 |
+| [soundfile](https://github.com/bastibe/python-soundfile) | BSD 3-Clause | (c) 2013 Bastian Bechtold | 音频文件读写 |
+| [NumPy](https://github.com/numpy/numpy) | BSD 3-Clause | (c) 2005-2025 NumPy Developers | 数值计算 |
+| [openai-whisper](https://github.com/openai/whisper) | MIT | (c) 2022 OpenAI | 语音识别 |
+| [FFmpeg](https://ffmpeg.org) | LGPL v2.1+ / GPL v2+ | FFmpeg 团队 | 音视频编解码 |
+
+完整的第三方许可证文本见 [LICENSE](LICENSE) 文件末尾的附录部分。
+
+#### 合规说明
+
+- **MIT 许可证（noisereduce、openai-whisper）**：要求在所有副本或实质性部分中保留原始版权声明和许可声明。本仓库的 [LICENSE](LICENSE) 文件已完整包含上述内容。
+- **BSD 3-Clause（soundfile、NumPy）**：要求以源代码或二进制形式再分发时，必须保留版权声明、条件列表和免责声明。本仓库在 [LICENSE](LICENSE) 文件中进行了完整复制。
+- **FFmpeg（LGPL/GPL）**：FFmpeg 作为外部命令行工具被调用，**不与本项目一同分发或静态/动态链接**。用户需自行安装 FFmpeg，并遵守其许可条款。详见 [FFmpeg 法律声明](https://ffmpeg.org/legal.html)。
+
+> 💡 **提示**：如果你 fork 或再分发本项目，请确保保留完整的 `LICENSE` 文件（含第三方声明部分），以满足各许可证的合规要求。

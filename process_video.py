@@ -10,8 +10,12 @@
     4. Whisper 中文语音识别 → SRT 字幕
     5. 字幕烧录到降噪版视频 → 最终输出
 
-依赖:
-    noisereduce>=3.0  soundfile>=0.12  numpy>=1.24  openai-whisper  ffmpeg
+依赖 (第三方开源软件许可见 LICENSE 文件):
+    noisereduce>=3.0    MIT        (c) 2019 Tim Sainburg
+    soundfile>=0.12     BSD-3      (c) 2013 Bastian Bechtold
+    numpy>=1.24         BSD-3      (c) 2005-2025 NumPy Developers
+    openai-whisper      MIT        (c) 2022 OpenAI
+    ffmpeg              LGPL/GPL   FFmpeg team (外部调用，非捆绑分发)
 """
 
 import argparse
